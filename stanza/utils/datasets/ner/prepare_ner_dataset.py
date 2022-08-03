@@ -284,6 +284,7 @@ import stanza.utils.datasets.ner.convert_bsnlp as convert_bsnlp
 import stanza.utils.datasets.ner.convert_fire_2013 as convert_fire_2013
 import stanza.utils.datasets.ner.convert_ijc as convert_ijc
 import stanza.utils.datasets.ner.convert_lst20 as convert_lst20
+import stanza.utils.datasets.ner.convert_nner22 as convert_nner22
 import stanza.utils.datasets.ner.convert_mr_l3cube as convert_mr_l3cube
 import stanza.utils.datasets.ner.convert_my_ucsy as convert_my_ucsy
 import stanza.utils.datasets.ner.convert_rgai as convert_rgai
@@ -804,6 +805,9 @@ def process_hinercollapsed(paths, short_name):
 def process_lst20(paths, short_name, include_space_char=True):
     convert_lst20.convert_lst20(paths, short_name, include_space_char)
 
+def process_nner22(paths, short_name, include_space_char=True):
+    convert_nner22.convert_nner22(paths, short_name, include_space_char)
+
 def process_mr_l3cube(paths, short_name):
     base_output_path = paths["NER_DATA_DIR"]
     in_directory = os.path.join(paths["NERBASE"], "MarathiNLP", "L3Cube-MahaNER", "IOB")
@@ -843,6 +847,7 @@ DATASET_MAPPING = {
     "tr_starlang":       process_starlang,
     "mr_l3cube":         process_mr_l3cube,
     "th_lst20":          process_lst20,
+    "th_nner22":         process_nner22
 }
 
 def main(dataset_name):
