@@ -44,11 +44,11 @@ def convert_nner22(paths, short_name, include_space_char=True):
 
                     for j in range(start, stop):
                         if j == start:
-                            ner_tag = "B_" + ner
+                            ner_tag = "B-" + ner
                         elif j == stop - 1:
-                            ner_tag = "E_" + ner
+                            ner_tag = "E-" + ner
                         else:
-                            ner_tag = "I_" + ner
+                            ner_tag = "I-" + ner
 
                         ner_dict[j] = (ner_tag, token[j])
 
