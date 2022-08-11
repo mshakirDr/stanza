@@ -49,6 +49,7 @@ def parse_args(args=None):
     parser.add_argument('--shorthand', type=str, help="Treebank shorthand")
 
     parser.add_argument('--hidden_dim', type=int, default=256)
+    parser.add_argument('--ner_max_depth', type=int, default=1)
     parser.add_argument('--char_hidden_dim', type=int, default=100)
     parser.add_argument('--word_emb_dim', type=int, default=100)
     parser.add_argument('--char_emb_dim', type=int, default=100)
@@ -106,6 +107,10 @@ def parse_args(args=None):
     if args.wandb_name:
         args.wandb = True
 
+    # For nested ner dataset, which we now only deal with th_nner22 dataset
+    if args.shorthand == "th_nner22":
+        args.ner_max_depth = 8
+
     return args
 
 def main(args=None):
@@ -117,6 +122,7 @@ def main(args=None):
 
     args = vars(args)
     logger.info("Running NER tagger in {} mode".format(args['mode']))
+    logger.info("NER max depth is {}".format(args['ner_max_depth']))
 
     if args['mode'] == 'train':
         train(args)
