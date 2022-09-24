@@ -106,6 +106,8 @@ class Trainer:
         if 'bert_hidden_layers' not in checkpoint['args']:
             # TODO: no need to do this once the models have bert_hidden_layers in them
             saved_args['bert_hidden_layers'] = None
+        if 'predict_constituency_dropout' not in checkpoint['args']:
+            saved_args['predict_constituency_dropout'] = 0.0
 
         params = checkpoint['params']
 

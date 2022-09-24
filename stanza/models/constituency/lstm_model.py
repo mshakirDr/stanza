@@ -37,6 +37,7 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence
 
 from stanza.models.common.bert_embedding import extract_bert_embeddings
+from stanza.models.common.dropout import WordDropout
 from stanza.models.common.utils import unsort
 from stanza.models.common.vocab import PAD_ID, UNK_ID
 from stanza.models.constituency.base_model import BaseModel
@@ -285,6 +286,7 @@ class LSTMModel(BaseModel, nn.Module):
 
         self.word_dropout = nn.Dropout(self.args['word_dropout'])
         self.predict_dropout = nn.Dropout(self.args['predict_dropout'])
+        self.predict_constituency_dropout = WordDropout(self.args['predict_constituency_dropout'])
         self.lstm_input_dropout = nn.Dropout(self.args['lstm_input_dropout'])
 
         # also register a buffer of zeros so that we can always get zeros on the appropriate device
@@ -897,7 +899,7 @@ class LSTMModel(BaseModel, nn.Module):
         # this way, we can, as an option, NOT include the constituents to the left
         # when building the current vector for a constituent
         # and the vector used for inference will still incorporate the entire LSTM
-        constituent_hx = torch.stack([self.constituent_stack.output(state.constituents) for state in states])
+        constituent_hx = self.predict_constituency_dropout(torch.stack([self.constituent_stack.output(state.constituents) for state in states]))
 
         hx = torch.cat((word_hx, transition_hx, constituent_hx), axis=1)
         for idx, output_layer in enumerate(self.output_layers):

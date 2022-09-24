@@ -332,6 +332,7 @@ def parse_args(args=None):
     # No attempt has been made to test the different dropouts separately...
     parser.add_argument('--word_dropout', default=0.2, type=float, help='Dropout on the word embedding')
     parser.add_argument('--predict_dropout', default=0.2, type=float, help='Dropout on the final prediction layer')
+    parser.add_argument('--predict_constituency_dropout', default=0.01, type=float, help='Dropout the constituency input to the final prediction layer')
     # lstm_dropout has not been fully tested yet
     # one experiment after 200 iterations (after retagging, so scores are lower than some other experiments):
     # 0.0: 0.9093
