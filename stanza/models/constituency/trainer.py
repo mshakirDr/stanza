@@ -108,6 +108,8 @@ class Trainer:
             saved_args['bert_hidden_layers'] = None
         if 'predict_constituency_dropout' not in checkpoint['args']:
             saved_args['predict_constituency_dropout'] = 0.0
+        if 'pattn_input_dropout' not in checkpoint['args']:
+            saved_args['pattn_input_dropout'] = 0.0
 
         params = checkpoint['params']
 

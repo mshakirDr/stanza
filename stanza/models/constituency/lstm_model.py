@@ -327,6 +327,8 @@ class LSTMModel(BaseModel, nn.Module):
         self.partitioned_transformer_module = None
         self.pattn_d_model = 0
         if LSTMModel.uses_pattn(self.args):
+            # a dropout for all the inputs to pattn
+            self.pattn_input_dropout = WordDropout(self.args['pattn_input_dropout'])
             # Initializations of parameters for the Partitioned Attention
             # round off the size of the model so that it divides in half evenly
             self.pattn_d_model = self.args['pattn_d_model'] // 2 * 2
@@ -640,7 +642,7 @@ class LSTMModel(BaseModel, nn.Module):
         # Extract partitioned representation
         if self.partitioned_transformer_module is not None:
             partitioned_embeddings = self.partitioned_transformer_module(None, all_word_inputs)
-            all_word_inputs = [torch.cat((x, y[:x.shape[0], :]), axis=1) for x, y in zip(all_word_inputs, partitioned_embeddings)]
+            all_word_inputs = [torch.cat((self.pattn_input_dropout(x), y[:x.shape[0], :]), axis=1) for x, y in zip(all_word_inputs, partitioned_embeddings)]
 
         # Extract Labeled Representation
         if self.label_attention_module is not None:
