@@ -415,13 +415,12 @@ def build_trainer(args, train_trees, dev_trees, foundation_cache, model_load_fil
         scheduler = build_scheduler(args, optimizer)
         trainer = Trainer(args, model, optimizer, scheduler)
     elif args['multistage']:
-        # run adadelta over the model for half the time with no pattn or lattn
+        # run adadelta over the model for half the time with no lattn
         # training then switches to a different optimizer for the rest
         # this works surprisingly well
         logger.info("Warming up model for %d iterations using AdaDelta to train the embeddings", args['epochs'] // 2)
         temp_args = dict(args)
-        # remove the attention layers for the temporary model
-        temp_args['pattn_num_layers'] = 0
+        # remove the lattn layer for the temporary model (need to experiment with varying numbers of pattn, lattn, etc)
         temp_args['lattn_d_proj'] = 0
 
         temp_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, temp_args)

@@ -222,18 +222,16 @@ class TestTrainer:
                 assert tr.epochs_trained == i
                 word_input_sizes[tr.model.word_input_size].append(i)
             if use_lattn:
-                # there should be three stages: no attn, pattn, pattn+lattn
-                assert len(word_input_sizes) == 3
-                word_input_keys = sorted(word_input_sizes.keys())
-                assert word_input_sizes[word_input_keys[0]] == [1, 2, 3, 4]
-                assert word_input_sizes[word_input_keys[1]] == [5, 6]
-                assert word_input_sizes[word_input_keys[2]] == [7, 8]
-            else:
-                # with no lattn, there are two stages: no attn, pattn
+                # there should be two stages: pattn, pattn+lattn
                 assert len(word_input_sizes) == 2
                 word_input_keys = sorted(word_input_sizes.keys())
-                assert word_input_sizes[word_input_keys[0]] == [1, 2, 3, 4]
-                assert word_input_sizes[word_input_keys[1]] == [5, 6, 7, 8]
+                assert word_input_sizes[word_input_keys[0]] == [1, 2, 3, 4, 5, 6]
+                assert word_input_sizes[word_input_keys[1]] == [7, 8]
+            else:
+                # with no lattn, there is just one stage
+                assert len(word_input_sizes) == 1
+                word_input_keys = sorted(word_input_sizes.keys())
+                assert word_input_sizes[word_input_keys[0]] == [1, 2, 3, 4, 5, 6, 7, 8]
 
     def test_multistage_lattn(self, wordvec_pretrain_file):
         """
