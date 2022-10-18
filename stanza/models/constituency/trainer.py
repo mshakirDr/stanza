@@ -34,6 +34,7 @@ from stanza.models.constituency.in_order_oracle import InOrderOracle
 from stanza.models.constituency.lstm_model import LSTMModel, StackHistory
 from stanza.models.constituency.parse_transitions import TransitionScheme
 from stanza.models.constituency.parse_tree import Tree
+from stanza.models.constituency.tree_embedding import TreeEmbedding
 from stanza.models.constituency.utils import retag_tags, retag_trees, build_optimizer, build_scheduler
 from stanza.models.constituency.utils import DEFAULT_LEARNING_EPS, DEFAULT_LEARNING_RATES, DEFAULT_LEARNING_RHO, DEFAULT_WEIGHT_DECAY
 from stanza.server.parser_eval import EvaluateParser, ParseResult
@@ -79,6 +80,26 @@ class Trainer:
         logger.info("Model saved to %s", filename)
 
     @staticmethod
+    def secondary_args(args):
+        """
+        Args for putting a parser inside a parser (yo dawg)
+
+        various properties of the TreeEmbedding are set to defaults which make sense for this purpose
+        """
+        new_args = {
+            "all_words": True,
+            "backprop": False,
+            "node_attn": True,
+            "top_layer": False,
+        }
+        for arg in ('wordvec_pretrain_file', 'charlm_forward_file', 'charlm_backward_file'):
+            if arg in args:
+                new_args[arg] = args[arg]
+        if "secondary_model" in args:
+            new_args["model"] = args["secondary_model"]
+        return new_args
+
+    @staticmethod
     def model_from_params(params, args, foundation_cache=None):
         """
         Build a new model just from the saved params and some extra args
@@ -106,6 +127,14 @@ class Trainer:
             bert_model, bert_tokenizer = load_bert(saved_args.get('bert_model', None), foundation_cache)
             forward_charlm = load_charlm(saved_args["charlm_forward_file"], foundation_cache)
             backward_charlm = load_charlm(saved_args["charlm_backward_file"], foundation_cache)
+            # TODO: can remove once the models are rebuilt
+            if 'secondary_parser' not in params:
+                params['secondary_parser'] = None
+
+            secondary_parser = None
+            if params['secondary_parser'] is not None:
+                secondary_parser = TreeEmbedding.model_from_params(params['secondary_parser'], Trainer.secondary_args(args), foundation_cache)
+
             model = LSTMModel(pretrain=pt,
                               forward_charlm=forward_charlm,
                               backward_charlm=backward_charlm,
@@ -119,6 +148,7 @@ class Trainer:
                               root_labels=params['root_labels'],
                               constituent_opens=params['constituent_opens'],
                               unary_limit=params['unary_limit'],
+                              secondary_parser=secondary_parser,
                               args=saved_args)
         else:
             raise ValueError("Unknown model type {}".format(model_type))
@@ -477,7 +507,7 @@ def build_trainer(args, train_trees, dev_trees, silver_trees, foundation_cache, 
         # using the model's current values works for if the new
         # dataset is the same or smaller
         # TODO: handle a larger dataset as well
-        model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, trainer.model.transitions, trainer.model.constituents, trainer.model.tags, trainer.model.delta_words, trainer.model.rare_words, trainer.model.root_labels, trainer.model.constituent_opens, trainer.model.unary_limit(), args)
+        model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, trainer.model.transitions, trainer.model.constituents, trainer.model.tags, trainer.model.delta_words, trainer.model.rare_words, trainer.model.root_labels, trainer.model.constituent_opens, trainer.model.unary_limit(), trainer.model.secondary_parser, args)
         model = model.to(args['device'])
         model.copy_with_new_structure(trainer.model)
         optimizer = build_optimizer(args, model, False)
@@ -493,14 +523,22 @@ def build_trainer(args, train_trees, dev_trees, silver_trees, foundation_cache, 
         temp_args['pattn_num_layers'] = 0
         temp_args['lattn_d_proj'] = 0
 
-        temp_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, temp_args)
+        secondary_parser = None
+        if args['secondary_model'] is not None:
+            secondary_parser = TreeEmbedding.from_parser_file(Trainer.secondary_args(temp_args), foundation_cache=foundation_cache)
+        temp_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, secondary_parser, temp_args)
         temp_model = temp_model.to(args['device'])
         temp_optim = build_optimizer(temp_args, temp_model, True)
         scheduler = build_scheduler(temp_args, temp_optim)
         trainer = Trainer(temp_model, temp_optim, scheduler)
     else:
-        model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, args)
+        secondary_parser = None
+        if args['secondary_model'] is not None:
+            secondary_parser = TreeEmbedding.from_parser_file(Trainer.secondary_args(args), foundation_cache=foundation_cache)
+            logger.info("Loaded secondary parser %s", args['secondary_model'])
+        model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, train_transitions, train_constituents, tags, words, rare_words, root_labels, open_nodes, unary_limit, secondary_parser, args)
         model = model.to(args['device'])
+        logger.info("Number of words in the training set found in the embedding: {} out of {}".format(model.num_words_known(words), len(words)))
 
         optimizer = build_optimizer(args, model, False)
         scheduler = build_scheduler(args, optimizer)
@@ -764,7 +802,7 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
             forward_charlm = foundation_cache.load_charlm(args['charlm_forward_file'])
             backward_charlm = foundation_cache.load_charlm(args['charlm_backward_file'])
             bert_model, bert_tokenizer = foundation_cache.load_bert(args['bert_model'])
-            new_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, model.transitions, model.constituents, model.tags, model.delta_words, model.rare_words, model.root_labels, model.constituent_opens, model.unary_limit(), temp_args)
+            new_model = LSTMModel(pt, forward_charlm, backward_charlm, bert_model, bert_tokenizer, model.transitions, model.constituents, model.tags, model.delta_words, model.rare_words, model.root_labels, model.constituent_opens, model.unary_limit(), model.secondary_parser, temp_args)
             new_model.to(device)
             new_model.copy_with_new_structure(model)
 

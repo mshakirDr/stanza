@@ -362,3 +362,10 @@ class TestTrainer:
         assert len(results[1].constituents) == 4
         assert results[1].constituents[-1].value == test_tree[1]
         assert results[1].constituents[-2].value == test_tree[1].children[0]
+
+    def test_secondary_parser(self, tmp_path, wordvec_pretrain_file):
+        inner_path = str(tmp_path / 'inner.pt')
+        inner_model = build_trainer(wordvec_pretrain_file)
+        inner_model.save(inner_path)
+
+        self.run_train_test(wordvec_pretrain_file, str(tmp_path), extra_args=['--secondary_model', inner_path])

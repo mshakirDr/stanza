@@ -362,7 +362,15 @@ class BaseModel(ABC):
         treebank = self.parse_sentences(tree_iterator, self.build_batch_from_trees_with_gold_sequence, batch_size, self.predict_gold, keep_state, keep_constituents, keep_scores=keep_scores)
         return treebank
 
-    def parse_tagged_words(self, words, batch_size):
+    def analyze_tagged_words(self, sentences, batch_size=None, keep_state=True, keep_constituents=True):
+        if batch_size is None:
+            # TODO: refactor?
+            batch_size = self.args['eval_batch_size']
+        sentence_iterator = iter(sentences)
+        treebank = self.parse_sentences(sentence_iterator, self.build_batch_from_tagged_words, batch_size, self.predict, keep_state, keep_constituents)
+        return treebank
+
+    def parse_tagged_words(self, words, batch_size, keep_state=False, keep_constituents=False):
         """
         This parses tagged words and returns a list of trees.
 

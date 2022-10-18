@@ -210,7 +210,7 @@ class ConstituencyComposition(Enum):
     UNTIED_KEY            = 10
 
 class LSTMModel(BaseModel, nn.Module):
-    def __init__(self, pretrain, forward_charlm, backward_charlm, bert_model, bert_tokenizer, transitions, constituents, tags, words, rare_words, root_labels, constituent_opens, unary_limit, args):
+    def __init__(self, pretrain, forward_charlm, backward_charlm, bert_model, bert_tokenizer, transitions, constituents, tags, words, rare_words, root_labels, constituent_opens, unary_limit, secondary_parser, args):
         """
         pretrain: a Pretrain object
         transitions: a list of all possible transitions which will be
@@ -367,6 +367,12 @@ class LSTMModel(BaseModel, nn.Module):
                 # (for historic reasons)
                 self.bert_layer_mix = None
             self.word_input_size = self.word_input_size + self.bert_dim
+
+        if secondary_parser is not None:
+            self.add_unsaved_module('secondary_parser', secondary_parser)
+            self.word_input_size += secondary_parser.output_size
+        else:
+            self.secondary_parser = None
 
         self.partitioned_transformer_module = None
         self.pattn_d_model = 0
@@ -650,6 +656,9 @@ class LSTMModel(BaseModel, nn.Module):
 
     def get_norms(self):
         lines = []
+        if self.secondary_parser is not None:
+            lines = self.secondary_parser.get_norms()
+        skip_prefix = {'bert_model', 'forward_charlm', 'backward_charlm', 'secondary_parser'}
         skip = set()
         if self.constituency_composition == ConstituencyComposition.UNTIED_MAX:
             skip = {'reduce_linear_weight', 'reduce_linear_bias'}
@@ -657,7 +666,7 @@ class LSTMModel(BaseModel, nn.Module):
             for c_idx, c_open in enumerate(self.constituent_opens):
                 lines.append("  %s weight %.6g bias %.6g" % (c_open, torch.norm(self.reduce_linear_weight[c_idx]).item(), torch.norm(self.reduce_linear_bias[c_idx]).item()))
         for name, param in self.named_parameters():
-            if param.requires_grad and name not in skip and name.split(".")[0] not in ('bert_model', 'forward_charlm', 'backward_charlm'):
+            if param.requires_grad and name not in skip and name.split(".")[0] not in skip_prefix:
                 lines.append("%s %.6g" % (name, torch.norm(param).item()))
         return lines
 
@@ -741,6 +750,11 @@ class LSTMModel(BaseModel, nn.Module):
                 bert_embeddings = [self.bert_layer_mix(feature).squeeze(2) + feature.sum(axis=2) / self.bert_layer_mix.in_features for feature in bert_embeddings]
 
             all_word_inputs = [torch.cat((x, y), axis=1) for x, y in zip(all_word_inputs, bert_embeddings)]
+
+        if self.secondary_parser is not None:
+            # TODO: pay attention to SentenceBoundary
+            tree_embedding = self.secondary_parser.embed_tagged_words(tagged_word_lists)
+            all_word_inputs = [torch.cat((x, y), axis=1) for x, y in zip(all_word_inputs, tree_embedding)]
 
         # Extract partitioned representation
         if self.partitioned_transformer_module is not None:
@@ -1124,6 +1138,12 @@ class LSTMModel(BaseModel, nn.Module):
             skipped = [k for k in model_state.keys() if self.is_unsaved_module(k)]
             for k in skipped:
                 del model_state[k]
+
+        if self.secondary_parser:
+            secondary_parser_params = self.secondary_parser.get_params(skip_modules)
+        else:
+            secondary_parser_params = None
+
         params = {
             'model': model_state,
             'model_type': "LSTM",
@@ -1136,6 +1156,7 @@ class LSTMModel(BaseModel, nn.Module):
             'root_labels': self.root_labels,
             'constituent_opens': self.constituent_opens,
             'unary_limit': self.unary_limit(),
+            'secondary_parser': secondary_parser_params,
         }
 
         return params
