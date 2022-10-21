@@ -175,7 +175,7 @@ class BaseModel(ABC):
         """
         For each State, return the next item in the gold_sequence
         """
-        return None, [y.gold_sequence[y.num_transitions()] for y in states]
+        return None, [y.gold_sequence[y.num_transitions()] for y in states], None
 
     def initial_state_from_preterminals(self, preterminal_lists, gold_trees):
         """
@@ -192,7 +192,8 @@ class BaseModel(ABC):
                         gold_sequence=None,
                         transitions=transitions,
                         constituents=constituents,
-                        word_position=0)
+                        word_position=0,
+                        score=0.0)
                   for idx, wq in enumerate(word_queues)]
         if gold_trees:
             states = [state._replace(gold_tree=gold_tree) for gold_tree, state in zip(gold_trees, states)]
@@ -278,7 +279,11 @@ class BaseModel(ABC):
             constituents = defaultdict(list)
 
         while len(state_batch) > 0:
-            _, transitions = transition_choice(state_batch)
+            pred_scores, transitions, scores = transition_choice(state_batch)
+            # for now, only keep scores if grad is enabled
+            # otherwise we just discard them anyway
+            if scores is not None and torch.is_grad_enabled():
+                state_batch = [state._replace(score=state.score + score) for state, score in zip(state_batch, scores)]
             state_batch = parse_transitions.bulk_apply(self, state_batch, transitions)
 
             if keep_constituents:
@@ -294,8 +299,7 @@ class BaseModel(ABC):
                 if state.finished(self):
                     predicted_tree = state.get_tree(self)
                     gold_tree = state.gold_tree
-                    # TODO: put an actual score here?
-                    treebank.append(ParseResult(gold_tree, [ScoredTree(predicted_tree, 1.0)], state if keep_state else None, constituents[batch_indices[idx]] if keep_constituents else None))
+                    treebank.append(ParseResult(gold_tree, [ScoredTree(predicted_tree, state.score)], state if keep_state else None, constituents[batch_indices[idx]] if keep_constituents else None))
                     treebank_indices.append(batch_indices[idx])
                     remove.add(idx)
 
@@ -345,7 +349,7 @@ class BaseModel(ABC):
         treebank = self.parse_sentences(tree_iterator, self.build_batch_from_trees_with_gold_sequence, batch_size, self.predict_gold, keep_state, keep_constituents)
         return treebank
 
-    def parse_tagged_words(self, words, batch_size, keep_state=False, keep_constituents=False):
+    def parse_tagged_words(self, words, batch_size):
         """
         This parses tagged words and returns a list of trees.
 
@@ -361,7 +365,7 @@ class BaseModel(ABC):
         self.eval()
 
         sentence_iterator = iter(words)
-        treebank = self.parse_sentences_no_grad(sentence_iterator, self.build_batch_from_tagged_words, batch_size, self.predict, keep_state=keep_state, keep_constituents=keep_constituents)
+        treebank = self.parse_sentences_no_grad(sentence_iterator, self.build_batch_from_tagged_words, batch_size, self.predict, keep_state=False, keep_constituents=False)
 
         results = [t.predictions[0].tree for t in treebank]
         return results
