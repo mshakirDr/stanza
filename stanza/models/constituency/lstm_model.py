@@ -28,8 +28,10 @@ A complete processing of a sentence is as follows:
 
 from collections import namedtuple
 from enum import Enum
+import heapq
 import logging
 import math
+from operator import attrgetter
 import random
 
 import torch
@@ -42,12 +44,13 @@ from stanza.models.common.vocab import PAD_ID, UNK_ID
 from stanza.models.constituency.base_model import BaseModel
 from stanza.models.constituency.label_attention import LabelAttentionModule
 from stanza.models.constituency.lstm_tree_stack import LSTMTreeStack
-from stanza.models.constituency.parse_transitions import TransitionScheme
+from stanza.models.constituency.parse_transitions import TransitionScheme, bulk_apply
 from stanza.models.constituency.parse_tree import Tree
 from stanza.models.constituency.partitioned_transformer import PartitionedTransformerModule
 from stanza.models.constituency.transformer_tree_stack import TransformerTreeStack
 from stanza.models.constituency.tree_stack import TreeStack
 from stanza.models.constituency.utils import build_nonlinearity, initialize_linear, TextTooLongError
+from stanza.server.parser_eval import ParseResult, ScoredTree
 
 logger = logging.getLogger('stanza')
 
@@ -977,6 +980,72 @@ class LSTMModel(BaseModel, nn.Module):
                 hx = self.nonlinearity(hx)
             hx = output_layer(hx)
         return hx
+
+    def beam_search(self, data_iterator, build_batch_fn, beam_size, batch_size):
+        """
+        For now do one tree at a time to see if this even helps
+        """
+        horizon_batch = build_batch_fn(batch_size, data_iterator)
+        if len(horizon_batch) == 0:
+            return []
+        horizon_iterator = iter(horizon_batch)
+        horizon_state = next(horizon_iterator, None)
+
+        treebank = []
+
+        beam = [horizon_state]
+        while len(beam) > 0:
+            best_states = [(state.score, state_idx, -1, state) for state_idx, state in enumerate(beam) if state.finished(self)]
+            heapq.heapify(best_states)
+
+            unfinished = [state for state in beam if not state.finished(self)]
+            predictions = self.forward(unfinished)
+            assert predictions.shape[0] == len(unfinished)
+
+            for state_idx, state in enumerate(unfinished):
+                for trans_idx in range(predictions.shape[1]):
+                    if not self.transitions[trans_idx].is_legal(state, self):
+                        continue
+                    score = state.score + predictions[state_idx, trans_idx]
+                    # we don't actually care about state_idx.  we just
+                    # want to sort by something if the scores are tied
+                    item = (score, state_idx, trans_idx, state)
+                    heapq.heappush(best_states, item)
+                    if len(best_states) > beam_size:
+                        heapq.heappop(best_states)
+            best_states = [(trans_idx, state._replace(score=(state.score + score))) for (score, _, trans_idx, state) in best_states]
+            beam = [state for trans_idx, state in best_states if trans_idx < 0]
+            update_states = [state for trans_idx, state in best_states if trans_idx >= 0]
+            update_trans = [self.transitions[trans_idx] for trans_idx, state in best_states if trans_idx >= 0]
+            beam.extend(bulk_apply(self, update_states, update_trans))
+
+            if all(x.finished(self) for x in beam):
+                beam.sort(key=attrgetter('score'))
+                state = beam[-1]
+                predicted_tree = state.get_tree(self)
+                gold_tree = state.gold_tree
+                treebank.append(ParseResult(gold_tree,
+                                            [ScoredTree(predicted_tree, state.score)],
+                                            None,
+                                            None))
+                #state if keep_state else None,
+                #constituents[batch_indices[idx]] if keep_constituents else None))
+
+                horizon_state = next(horizon_iterator, None)
+                if horizon_state is None:
+                    horizon_batch = build_batch_fn(batch_size, data_iterator)
+                    if len(horizon_batch) == 0:
+                        break
+                    horizon_iterator = iter(horizon_batch)
+                    horizon_state = next(horizon_iterator, None)
+
+                beam = [horizon_state]
+
+        return treebank
+
+    def beam_search_no_grad(self, data_iterator, build_batch_fn, beam_size, batch_size):
+        with torch.no_grad():
+            return self.beam_search(data_iterator, build_batch_fn, beam_size, batch_size)
 
     def predict(self, states, is_legal=True):
         """

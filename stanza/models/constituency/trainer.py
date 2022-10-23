@@ -814,7 +814,10 @@ def run_dev_set(model, dev_trees, args, evaluator=None):
     model.eval()
 
     tree_iterator = iter(tqdm(dev_trees))
-    treebank = model.parse_sentences_no_grad(tree_iterator, model.build_batch_from_trees, args['eval_batch_size'], model.predict, keep_state=False)
+    if args['test_beam_size']:
+        treebank = model.beam_search_no_grad(tree_iterator, model.build_batch_from_trees, args['test_beam_size'], args['eval_batch_size'])
+    else:
+        treebank = model.parse_sentences_no_grad(tree_iterator, model.build_batch_from_trees, args['eval_batch_size'], model.predict, keep_state=False)
     full_results = treebank
 
     if args['num_generate'] > 0:

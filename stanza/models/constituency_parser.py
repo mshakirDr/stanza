@@ -204,6 +204,7 @@ def parse_args(args=None):
     parser.add_argument('--epochs', type=int, default=400)
     parser.add_argument('--epoch_size', type=int, default=5000, help="Runs this many trees in an 'epoch' instead of going through the training dataset exactly once.  Set to 0 to do the whole training set")
 
+    parser.add_argument('--test_beam_size', type=int, default=0, help='Test using a beam.')
     # AdaDelta warmup for the conparser.  Motivation: AdaDelta results in
     # higher scores overall, but learns 0s for the weights of the pattn and
     # lattn layers.  AdamW learns weights for pattn, and the models are more
