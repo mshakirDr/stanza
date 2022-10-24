@@ -12,6 +12,7 @@ from collections import Counter
 from collections import namedtuple
 import copy
 from enum import Enum
+import heapq
 import logging
 from operator import itemgetter
 import os
@@ -501,15 +502,16 @@ def train(args, model_load_file, model_save_each_file, retag_pipeline):
 
 TrainItem = namedtuple("TrainItem", ['tree', 'gold_sequence', 'preterminals'])
 
-class EpochStats(namedtuple("EpochStats", ['epoch_loss', 'transitions_correct', 'transitions_incorrect', 'repairs_used', 'fake_transitions_used', 'nans'])):
+class EpochStats(namedtuple("EpochStats", ['prediction_loss', 'beam_loss', 'transitions_correct', 'transitions_incorrect', 'repairs_used', 'fake_transitions_used', 'nans'])):
     def __add__(self, other):
         transitions_correct = self.transitions_correct + other.transitions_correct
         transitions_incorrect = self.transitions_incorrect + other.transitions_incorrect
         repairs_used = self.repairs_used + other.repairs_used
         fake_transitions_used = self.fake_transitions_used + other.fake_transitions_used
-        epoch_loss = self.epoch_loss + other.epoch_loss
+        prediction_loss = self.prediction_loss + other.prediction_loss
+        beam_loss = self.beam_loss + other.beam_loss
         nans = self.nans + other.nans
-        return EpochStats(epoch_loss, transitions_correct, transitions_incorrect, repairs_used, fake_transitions_used, nans)
+        return EpochStats(prediction_loss, beam_loss, transitions_correct, transitions_incorrect, repairs_used, fake_transitions_used, nans)
 
 
 def iterate_training(args, trainer, train_trees, train_sequences, transitions, dev_trees, foundation_cache, model_save_each_filename, evaluator):
@@ -531,8 +533,10 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
     # datasets when using 'mean' instead of 'sum' for reduction
     # (Remember to adjust the weight decay when rerunning that experiment)
     model_loss_function = nn.CrossEntropyLoss(reduction='sum')
+    beam_loss_function = nn.MSELoss(reduction='sum')
     if args['cuda']:
         model_loss_function.cuda()
+        beam_loss_function.cuda()
 
     device = next(model.parameters()).device
     transition_tensors = {x: torch.tensor(y, requires_grad=False, device=device).unsqueeze(0)
@@ -571,7 +575,7 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
         epoch_data = epoch_data[:args['epoch_size']]
         epoch_data.sort(key=lambda x: len(x[1]))
 
-        epoch_stats = train_model_one_epoch(trainer.epochs_trained, trainer, transition_tensors, model_loss_function, epoch_data, args)
+        epoch_stats = train_model_one_epoch(trainer.epochs_trained, trainer, transition_tensors, model_loss_function, beam_loss_function, epoch_data, args)
 
         # print statistics
         f1, _ = run_dev_set(model, dev_trees, args, evaluator)
@@ -587,10 +591,10 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
             trainer.save(model_save_each_filename % trainer.epochs_trained, save_optimizer=True)
         if epoch_stats.nans > 0:
             logger.warning("Had to ignore %d batches with NaN", epoch_stats.nans)
-        logger.info("Epoch %d finished\n  Transitions correct: %s\n  Transitions incorrect: %s\n  Total loss for epoch: %.5f\n  Dev score      (%5d): %8f\n  Best dev score (%5d): %8f", trainer.epochs_trained, epoch_stats.transitions_correct, epoch_stats.transitions_incorrect, epoch_stats.epoch_loss, trainer.epochs_trained, f1, trainer.best_epoch, trainer.best_f1)
+        logger.info("Epoch %d finished\n  Transitions correct: %s\n  Transitions incorrect: %s\n  Prediction loss for epoch: %.5f\n  Beam loss for epoch: %.5f\n  Dev score      (%5d): %8f\n  Best dev score (%5d): %8f", trainer.epochs_trained, epoch_stats.transitions_correct, epoch_stats.transitions_incorrect, epoch_stats.prediction_loss, epoch_stats.beam_loss, trainer.epochs_trained, f1, trainer.best_epoch, trainer.best_f1)
 
         if args['wandb']:
-            wandb.log({'epoch_loss': epoch_stats.epoch_loss, 'dev_score': f1}, step=trainer.epochs_trained)
+            wandb.log({'prediction_loss': epoch_stats.prediction_loss, 'beam_loss': epoch_stats.beam_loss, 'dev_score': f1}, step=trainer.epochs_trained)
             if args['wandb_norm_regex']:
                 watch_regex = re.compile(args['wandb_norm_regex'])
                 for n, p in model.named_parameters():
@@ -642,7 +646,7 @@ def iterate_training(args, trainer, train_trees, train_sequences, transitions, d
 
     return trainer
 
-def train_model_one_epoch(epoch, trainer, transition_tensors, model_loss_function, epoch_data, args):
+def train_model_one_epoch(epoch, trainer, transition_tensors, model_loss_function, beam_loss_function, epoch_data, args):
     interval_starts = list(range(0, len(epoch_data), args['train_batch_size']))
     random.shuffle(interval_starts)
 
@@ -650,11 +654,11 @@ def train_model_one_epoch(epoch, trainer, transition_tensors, model_loss_functio
     optimizer = trainer.optimizer
     scheduler = trainer.scheduler
 
-    epoch_stats = EpochStats(0.0, Counter(), Counter(), Counter(), 0, 0)
+    epoch_stats = EpochStats(0.0, 0.0, Counter(), Counter(), Counter(), 0, 0)
 
     for batch_idx, interval_start in enumerate(tqdm(interval_starts, postfix="Epoch %d" % epoch)):
         batch = epoch_data[interval_start:interval_start+args['train_batch_size']]
-        batch_stats = train_model_one_batch(epoch, batch_idx, model, batch, transition_tensors, model_loss_function, args)
+        batch_stats = train_model_one_batch(epoch, batch_idx, model, batch, transition_tensors, model_loss_function, beam_loss_function, args)
 
         # Early in the training, some trees will be degenerate in a
         # way that results in layers going up the tree amplifying the
@@ -685,7 +689,9 @@ def train_model_one_epoch(epoch, trainer, transition_tensors, model_loss_functio
 
     return epoch_stats
 
-def train_model_one_batch(epoch, batch_idx, model, training_batch, transition_tensors, model_loss_function, args):
+BeamState = namedtuple('BeamState', ['score', 'state_idx', 'trans_idx', 'trans', 'pred_idx', 'state', 'is_gold'])
+
+def train_model_one_batch(epoch, batch_idx, model, training_batch, transition_tensors, model_loss_function, beam_loss_function, args):
     """
     Train the model for one batch
 
@@ -778,8 +784,125 @@ def train_model_one_batch(epoch, batch_idx, model, training_batch, transition_te
     errors = torch.cat(all_errors)
     answers = torch.cat(all_answers)
 
-    tree_loss = model_loss_function(errors, answers)
-    tree_loss.backward()
+    prediction_loss = model_loss_function(errors, answers)
+
+    beam_loss = 0.0
+    beam_gold_errors = []
+    beam_gold_answers = []
+    beam_pred_errors = []
+    beam_pred_answers = []
+    train_beam_size = args['train_beam_size']
+    if train_beam_size > 0:
+        beams = [[BeamState(0.0, -1, -1, -1, -1, state, True)] for state in initial_states]
+        #print("Starting batch beam-search, len == %d" % len(beams))
+        while len(beams) > 0:
+            # plan:
+            # process a beam until the gold tree falls off the beam
+            # at that point, it falls off because its score is X and
+            # the other scores on the beam are Y, X < Y
+            # so train the latest prediction which led to this problem
+            # with a loss of Y-X
+            # if the gold state is still activating, train it with X-Y
+            # TODO: maybe train states which are finished somehow?
+            #
+            # first, predict over all states from all beams joined together
+            # seperate the predictions into beams
+            # so now we have the predictions for each beam
+            #
+            # either a beam still has the gold state on it, in which
+            # case we keep that beam,
+            # or we no longer have the gold state, in which case
+            # we drop the beam and keep the error term as described above
+            state_batch = [beam_state.state for beam in beams for beam_state in beam if not beam_state.state.finished(model)]
+            predictions = model.forward(state_batch)
+            pred_idx = 0
+            new_beams = []
+            for beam_idx, beam in enumerate(beams):
+                best_states = []
+                gold_score = None
+                for state_idx, beam_state in enumerate(beam):
+                    if beam_state.state.finished(model):
+                        if beam_state.is_gold:
+                            gold_score = beam_state.score
+                        new_beam_state = beam_state._replace(state_idx = state_idx,
+                                                             trans_idx = -1,
+                                                             trans = None,
+                                                             pred_idx = None)
+                        heapq.heappush(best_states, new_beam_state)
+                        if len(best_states) > train_beam_size:
+                            heapq.heappop(best_states)
+                    else:
+                        prediction = predictions[pred_idx]
+                        for trans_idx, trans in enumerate(model.transitions):
+                            # if not legal, don't put this on the beam
+                            if not trans.is_legal(beam_state.state, model):
+                                continue
+                            if beam_state.is_gold and beam_state.state.gold_sequence[beam_state.state.num_transitions()] == trans:
+                                gold_score = beam_state.score + prediction[trans_idx]
+                            new_beam_state = beam_state._replace(score = beam_state.score + prediction[trans_idx],
+                                                                 state_idx = state_idx,
+                                                                 trans_idx = trans_idx,
+                                                                 trans = trans,
+                                                                 pred_idx = pred_idx,
+                                                                 state = beam_state.state)
+                            heapq.heappush(best_states, new_beam_state)
+                            if len(best_states) > train_beam_size:
+                                heapq.heappop(best_states)
+                        pred_idx += 1
+                for beam_state in best_states:
+                    if beam_state.is_gold and beam_state.state.finished(model):
+                        # yay, the gold state survived (and was finished)
+                        break
+                    elif beam_state.is_gold and beam_state.state.gold_sequence[beam_state.state.num_transitions()] == beam_state.trans:
+                        # also the gold state survived (unfinished)
+                        break
+                else: # fell through the for loop - no gold state!
+                    assert gold_score is not None, "gold state should have been on the beam at the start"
+                    # oops, the gold state fell off the beam.  here is where we add error terms
+                    # then we skip the beam
+                    beam_gold_errors.append(gold_score)
+                    max_score = max(x.score for x in best_states)
+                    # TODO: make the clipping a parameter?
+                    #answer = min(max_score, gold_score + 10).detach().clone()
+                    beam_gold_answers.append(max_score)
+                    for beam_state in best_states:
+                        # this handles both finished and unfinished
+                        # note that it is training down the entire score, not just the last entry
+                        beam_pred_errors.append(beam_state.score)
+                        #answer = max(gold_score, beam_state.score - 10).detach().clone()
+                        beam_pred_answers.append(gold_score)
+                    continue
+                # finished states with the best scores continue on the beam with no further processing
+                finished = [x for x in best_states if x.state.finished(model)]
+                # apply transitions (TODO: bulk this operation over all beams)
+                unfinished = [x for x in best_states if not x.state.finished(model)]
+                states = [x.state for x in unfinished]
+                trans = [x.trans for x in unfinished]
+                # make new beam
+                is_gold = [beam_state.is_gold and beam_state.state.gold_sequence[beam_state.state.num_transitions()] == beam_state.trans
+                           for beam_state in unfinished]
+                new_states = parse_transitions.bulk_apply(model, states, trans, fail=True)
+                unfinished = [x._replace(state=state, is_gold=gold) for x, state, gold in zip(unfinished, new_states, is_gold)]
+                # if everything is finished, the beam is finished (TODO: add an error term?)
+                if all(beam_state.state.finished(model) for beam_state in unfinished):
+                    continue
+                new_beam = finished + unfinished
+                new_beams.append(new_beam)
+            beams = new_beams
+            #print("... %d" % len(beams))
+        beam_gold_errors = torch.stack(beam_gold_errors)
+        beam_gold_answers = torch.stack(beam_gold_answers)
+        beam_pred_errors = torch.stack(beam_pred_errors)
+        beam_pred_answers = torch.stack(beam_pred_answers)
+        #print(beam_errors)
+        #print(beam_answers)
+        # TODO: make this scaling term an option
+        beam_loss = beam_loss_function(beam_gold_errors, beam_gold_answers) + beam_loss_function(beam_pred_errors, beam_pred_answers) / train_beam_size
+        beam_loss = beam_loss * 0.1
+
+    batch_loss = prediction_loss + beam_loss
+    batch_loss.backward()
+
     if args['watch_regex']:
         matched = False
         logger.info("Watching %s   ... epoch %d batch %d", args['watch_regex'], epoch, batch_idx)
@@ -795,14 +918,17 @@ def train_model_one_batch(epoch, batch_idx, model, training_batch, transition_te
                     logger.info("  %s norm: %f grad not required", n, torch.linalg.norm(p))
         if not matched:
             logger.info("  (none found!)")
-    if torch.any(torch.isnan(tree_loss)):
-        batch_loss = 0.0
+    if torch.any(torch.isnan(prediction_loss)) or (beam_loss != 0.0 and torch.any(torch.isnan(beam_loss))):
+        prediction_loss = 0.0
+        beam_loss = 0.0
         nans = 1
     else:
-        batch_loss = tree_loss.item()
+        prediction_loss = prediction_loss.item()
+        if beam_loss != 0.0:
+            beam_loss = beam_loss.item()
         nans = 0
 
-    return EpochStats(batch_loss, transitions_correct, transitions_incorrect, repairs_used, fake_transitions_used, nans)
+    return EpochStats(prediction_loss, beam_loss, transitions_correct, transitions_incorrect, repairs_used, fake_transitions_used, nans)
 
 def run_dev_set(model, dev_trees, args, evaluator=None):
     """
