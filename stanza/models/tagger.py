@@ -63,6 +63,9 @@ def parse_args(args=None):
     parser.add_argument('--rec_dropout', type=float, default=0, help="Recurrent dropout")
     parser.add_argument('--char_rec_dropout', type=float, default=0, help="Recurrent dropout")
 
+    parser.add_argument('--attention', default=False, action='store_true', help='Use an MHA on the inputs before the LSTM')
+    parser.add_argument('--attention_heads', type=int, default=8, help='Number of attention heads to use')
+
     # TODO: refactor charlm arguments for models which use it?
     parser.add_argument('--no_char', dest='char', action='store_false', help="Turn off character model.")
     parser.add_argument('--char_bidirectional', dest='char_bidirectional', action='store_true', help="Use a bidirectional version of the non-pretrained charlm.  Doesn't help much, makes the models larger")
@@ -205,6 +208,9 @@ def train(args):
     logger.info("Training tagger...")
     foundation_cache = FoundationCache()
     trainer = Trainer(args=args, vocab=vocab, pretrain=pretrain, use_cuda=args['cuda'], foundation_cache=foundation_cache)
+
+    if args['log_norms']:
+        trainer.model.log_norms()
 
     global_step = 0
     max_steps = args['max_steps']
