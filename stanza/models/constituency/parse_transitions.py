@@ -471,7 +471,7 @@ class OpenConstituent(Transition):
         return "Open"
 
     def __repr__(self):
-        return "OpenConstituent({})".format(self.label)
+        return "OpenConstituent{}".format(self.label)
 
     def __eq__(self, other):
         if self is other:
@@ -537,6 +537,12 @@ class Finalize(Transition):
         return hash((53, self.label))
 
 class CloseConstituent(Transition):
+    def __init__(self, *label):
+        # Some closes can be labeled, if the transition sequence allows for it
+        # Actually, all that does is override the label of the OpenConstituent
+        # we saw earlier
+        self.label = tuple(label)
+
     def delta_opens(self):
         return -1
 
@@ -549,8 +555,13 @@ class CloseConstituent(Transition):
             # the whole thing to transform the children into a new node
             children.append(constituents.value)
             constituents = constituents.pop()
-        # the Dummy has the label on it
-        label = model.get_top_constituent(constituents).label
+        if self.label:
+            # we have our own label, so we can ignore the dummy's label
+            # instead we just skip right by it
+            label = self.label
+        else:
+            # the Dummy has the label on it
+            label = model.get_top_constituent(constituents).label
         # pop past the Dummy as well
         constituents = constituents.pop()
         if not model.is_top_down():
@@ -637,21 +648,28 @@ class CloseConstituent(Transition):
                 return False
         return True
 
+    def components(self):
+        if not self.label:
+            return [self]
+        return [CloseConstituent(label) for label in self.label]
+
     def short_name(self):
         return "Close"
 
     def __repr__(self):
-        return "CloseConstituent"
+        if not self.label:
+            return "CloseConstituent"
+        return "CloseConstituent{}".format(self.label)
 
     def __eq__(self, other):
         if self is other:
             return True
-        if isinstance(other, CloseConstituent):
-            return True
-        return False
+        if not isinstance(other, CloseConstituent):
+            return False
+        return self.label == other.label
 
     def __hash__(self):
-        return hash(93)
+        return hash((93, self.label))
 
 def check_transitions(train_transitions, other_transitions, treebank_name):
     """

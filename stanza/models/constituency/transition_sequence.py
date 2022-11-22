@@ -108,7 +108,10 @@ def yield_in_order_compound_sequence(tree, transition_scheme):
             for transition in helper(child):
                 yield transition
 
-        yield CloseConstituent()
+        if transition_scheme is TransitionScheme.IN_ORDER_COMPOUND:
+            yield CloseConstituent(*labels)
+        else:
+            yield CloseConstituent(tree.label)
 
         if transition_scheme is TransitionScheme.IN_ORDER_UNARY and len(labels) > 0:
             yield CompoundUnary(*labels)

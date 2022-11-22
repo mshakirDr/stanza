@@ -32,7 +32,7 @@ from stanza.models.constituency import tree_reader
 from stanza.models.constituency.base_model import SimpleModel, UNARY_LIMIT
 from stanza.models.constituency.in_order_oracle import InOrderOracle
 from stanza.models.constituency.lstm_model import LSTMModel, StackHistory
-from stanza.models.constituency.parse_transitions import TransitionScheme
+from stanza.models.constituency.parse_transitions import TransitionScheme, CloseConstituent
 from stanza.models.constituency.parse_tree import Tree
 from stanza.models.constituency.utils import retag_tags, retag_trees, build_optimizer, build_scheduler
 from stanza.models.constituency.utils import DEFAULT_LEARNING_EPS, DEFAULT_LEARNING_RATES, DEFAULT_LEARNING_RHO, DEFAULT_WEIGHT_DECAY
@@ -105,12 +105,18 @@ class Trainer:
             bert_model, bert_tokenizer = load_bert(saved_args.get('bert_model', None), foundation_cache)
             forward_charlm = load_charlm(saved_args["charlm_forward_file"], foundation_cache)
             backward_charlm = load_charlm(saved_args["charlm_backward_file"], foundation_cache)
+
+            # temporarily patch up transitions until the models are rebuilt with CloseConstituent()
+            transitions = params['transitions']
+            transitions = [CloseConstituent() if isinstance(x, CloseConstituent) and not hasattr(x, "label") else x
+                           for x in transitions]
+
             model = LSTMModel(pretrain=pt,
                               forward_charlm=forward_charlm,
                               backward_charlm=backward_charlm,
                               bert_model=bert_model,
                               bert_tokenizer=bert_tokenizer,
-                              transitions=params['transitions'],
+                              transitions=transitions,
                               constituents=params['constituents'],
                               tags=params['tags'],
                               words=params['words'],
