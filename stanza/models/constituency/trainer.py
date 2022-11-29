@@ -30,6 +30,7 @@ from stanza.models.constituency import parse_tree
 from stanza.models.constituency import transition_sequence
 from stanza.models.constituency import tree_reader
 from stanza.models.constituency.base_model import SimpleModel, UNARY_LIMIT
+from stanza.models.constituency.constituency_reranker import ConstituencyReranker
 from stanza.models.constituency.in_order_oracle import InOrderOracle
 from stanza.models.constituency.lstm_model import LSTMModel, StackHistory
 from stanza.models.constituency.parse_transitions import TransitionScheme
@@ -958,10 +959,21 @@ def run_dev_set(model, retagged_trees, original_trees, args, evaluator=None):
     logger.info("Processing %d trees from %s", len(retagged_trees), args['eval_file'])
     model.eval()
 
-    keep_scores = args['num_generate'] > 0
+    temp_args = {
+        'wordvec_pretrain_file': args['wordvec_pretrain_file'],
+        'charlm_forward_file': args['charlm_forward_file'],
+        'charlm_backward_file': args['charlm_backward_file'],
+    }
+    reranker_model = Trainer.load("/nlp/scr/horatio/saved_models/constituency/vi_inorder_reversed.pt", args=temp_args)
+    reranker_model = reranker_model.model
+    reranker_model.eval()
+    reranker = ConstituencyReranker(model=reranker_model, batch_size=args['eval_batch_size'])
+    #keep_scores = args['num_generate'] > 0
+    keep_scores = False
 
     tree_iterator = iter(tqdm(retagged_trees))
     treebank = model.parse_sentences_no_grad(tree_iterator, model.build_batch_from_trees, args['eval_batch_size'], model.predict, keep_scores=keep_scores)
+    # treebank = reranker.score_parse_results(treebank)
     full_results = treebank
 
     if args['num_generate'] > 0:
@@ -969,7 +981,9 @@ def run_dev_set(model, retagged_trees, original_trees, args, evaluator=None):
         generated_treebanks = [treebank]
         for i in tqdm(range(args['num_generate'])):
             tree_iterator = iter(tqdm(retagged_trees, leave=False, postfix="tb%03d" % i))
-            generated_treebanks.append(model.parse_sentences_no_grad(tree_iterator, model.build_batch_from_trees, args['eval_batch_size'], model.weighted_choice, keep_scores=keep_scores))
+            treebank = model.parse_sentences_no_grad(tree_iterator, model.build_batch_from_trees, args['eval_batch_size'], model.weighted_choice, keep_scores=keep_scores)
+            #treebank = reranker.score_parse_results(treebank)
+            generated_treebanks.append(treebank)
 
         #best_treebank = [ParseResult(parses[0].gold, [max([p.predictions[0] for p in parses], key=itemgetter(1))], None, None)
         #                 for parses in zip(*generated_treebanks)]
