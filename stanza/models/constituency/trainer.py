@@ -314,6 +314,12 @@ def evaluate(args, model_file, retag_pipeline):
             logger.info("Retagging trees using the %s tags from the %s package...", args['retag_method'], args['retag_package'])
             retagged_treebank = retag_trees(treebank, retag_pipeline, args['retag_xpos'])
             logger.info("Retagging finished")
+        else:
+            retagged_treebank = treebank
+
+        if trainer.model.reverse_sentence:
+            retagged_treebank = [x.reverse() for x in retagged_treebank]
+            treebank = [x.reverse() for x in treebank]
 
         if args['log_norms']:
             trainer.model.log_norms()
@@ -973,7 +979,7 @@ def run_dev_set(model, retagged_trees, original_trees, args, evaluator=None):
 
     tree_iterator = iter(tqdm(retagged_trees))
     treebank = model.parse_sentences_no_grad(tree_iterator, model.build_batch_from_trees, args['eval_batch_size'], model.predict, keep_scores=keep_scores)
-    # treebank = reranker.score_parse_results(treebank)
+    treebank = reranker.score_parse_results(treebank)
     full_results = treebank
 
     if args['num_generate'] > 0:
@@ -982,12 +988,12 @@ def run_dev_set(model, retagged_trees, original_trees, args, evaluator=None):
         for i in tqdm(range(args['num_generate'])):
             tree_iterator = iter(tqdm(retagged_trees, leave=False, postfix="tb%03d" % i))
             treebank = model.parse_sentences_no_grad(tree_iterator, model.build_batch_from_trees, args['eval_batch_size'], model.weighted_choice, keep_scores=keep_scores)
-            #treebank = reranker.score_parse_results(treebank)
+            treebank = reranker.score_parse_results(treebank)
             generated_treebanks.append(treebank)
 
-        #best_treebank = [ParseResult(parses[0].gold, [max([p.predictions[0] for p in parses], key=itemgetter(1))], None, None)
-        #                 for parses in zip(*generated_treebanks)]
-        #generated_treebanks = [best_treebank] + generated_treebanks
+        best_treebank = [ParseResult(parses[0].gold, [max([p.predictions[0] for p in parses], key=itemgetter(1))], None, None)
+                         for parses in zip(*generated_treebanks)]
+        generated_treebanks = [best_treebank] + generated_treebanks
 
         # TODO: if the model is dropping trees, this will not work
         full_results = [ParseResult(parses[0].gold, [p.predictions[0] for p in parses], None, None)
