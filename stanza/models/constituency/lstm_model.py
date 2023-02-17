@@ -1040,15 +1040,7 @@ class LSTMModel(BaseModel, nn.Module):
         transition_node = transitions.value
         return transition_node.value
 
-    def forward(self, states):
-        """
-        Return logits for a prediction of what transition to make next
-
-        We've basically done all the work analyzing the state as
-        part of applying the transitions, so this method is very simple
-
-        return shape: (num_states, num_transitions)
-        """
+    def current_representation(self, states):
         word_hx = torch.stack([state.get_word(state.word_position).hx for state in states])
         transition_hx = torch.stack([self.transition_stack.output(state.transitions) for state in states])
         # this .output() is the output of the constituent stack, not the
@@ -1059,12 +1051,25 @@ class LSTMModel(BaseModel, nn.Module):
         constituent_hx = torch.stack([self.constituent_stack.output(state.constituents) for state in states])
 
         hx = torch.cat((word_hx, transition_hx, constituent_hx), axis=1)
+        return hx
+
+    def forward(self, states):
+        """
+        Return logits for a prediction of what transition to make next
+
+        We've basically done all the work analyzing the state as
+        part of applying the transitions, so this method is very simple
+
+        return shape: (num_states, num_transitions)
+        """
+        representation = self.current_representation(states)
+        hx = representation
         for idx, output_layer in enumerate(self.output_layers):
             hx = self.predict_dropout(hx)
             if not self.maxout_k and idx < len(self.output_layers) - 1:
                 hx = self.nonlinearity(hx)
             hx = output_layer(hx)
-        return hx
+        return hx, representation
 
     def predict(self, states, is_legal=True):
         """
@@ -1074,7 +1079,7 @@ class LSTMModel(BaseModel, nn.Module):
         This means returning None if there are no legal transitions.
         Hopefully the constraints prevent that from happening
         """
-        predictions = self.forward(states)
+        predictions, representation = self.forward(states)
         pred_max = torch.argmax(predictions, dim=1)
         scores = torch.take_along_dim(predictions, pred_max.unsqueeze(1), dim=1)
         pred_max = pred_max.detach().cpu()
@@ -1093,7 +1098,7 @@ class LSTMModel(BaseModel, nn.Module):
                         pred_trans[idx] = None
                         scores[idx] = None
 
-        return predictions, pred_trans, scores.squeeze(1)
+        return predictions, pred_trans, scores.squeeze(1), representation
 
     def weighted_choice(self, states):
         """
@@ -1101,7 +1106,7 @@ class LSTMModel(BaseModel, nn.Module):
 
         TODO: pass in a temperature
         """
-        predictions = self.forward(states)
+        predictions, representation = self.forward(states)
         pred_trans = []
         all_scores = []
         for state, prediction in zip(states, predictions):
@@ -1116,17 +1121,17 @@ class LSTMModel(BaseModel, nn.Module):
             pred_trans.append(self.transitions[idx])
             all_scores.append(prediction[idx])
         all_scores = torch.stack(all_scores)
-        return predictions, pred_trans, all_scores
+        return predictions, pred_trans, all_scores, representation
 
     def predict_gold(self, states):
         """
         For each State, return the next item in the gold_sequence
         """
-        predictions = self.forward(states)
+        predictions, representation = self.forward(states)
         transitions = [y.gold_sequence[y.num_transitions()] for y in states]
         indices = torch.tensor([self.transition_map[t] for t in transitions], device=predictions.device)
         scores = torch.take_along_dim(predictions, indices.unsqueeze(1), dim=1)
-        return predictions, transitions, scores.squeeze(1)
+        return predictions, transitions, scores.squeeze(1), representation
 
     def get_params(self, skip_modules=True):
         """

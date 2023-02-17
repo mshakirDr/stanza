@@ -900,7 +900,7 @@ def train_model_one_batch(epoch, batch_idx, model, training_batch, transition_te
     # update all states using either the gold or predicted transition
     # any trees which are now finished are removed from the training cycle
     while len(current_batch) > 0:
-        outputs, pred_transitions, _ = model.predict(current_batch, is_legal=False)
+        outputs, pred_transitions, _, _ = model.predict(current_batch, is_legal=False)
         gold_transitions = [x.gold_sequence[x.num_transitions()] for x in current_batch]
         trans_tensor = [transition_tensors[gold_transition] for gold_transition in gold_transitions]
         all_errors.append(outputs)

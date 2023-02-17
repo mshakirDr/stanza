@@ -183,7 +183,7 @@ class BaseModel(ABC):
             for trans, state in zip(transitions, states):
                 if not trans.is_legal(state, self):
                     raise RuntimeError("Transition {}:{} was not legal in a transition sequence:\nOriginal tree: {}\nTransitions: {}".format(state.num_transitions(), trans, state.gold_tree, state.gold_sequence))
-        return None, transitions, None
+        return None, transitions, None, None
 
     def initial_state_from_preterminals(self, preterminal_lists, gold_trees):
         """
@@ -201,7 +201,8 @@ class BaseModel(ABC):
                         transitions=transitions,
                         constituents=constituents,
                         word_position=0,
-                        score=0.0)
+                        score=0.0,
+                        shift_representations=TreeStack(None, None, 0))
                   for idx, wq in enumerate(word_queues)]
         if gold_trees:
             states = [state._replace(gold_tree=gold_tree) for gold_tree, state in zip(gold_trees, states)]
@@ -292,7 +293,7 @@ class BaseModel(ABC):
             constituents = defaultdict(list)
 
         while len(state_batch) > 0:
-            pred_scores, transitions, scores = transition_choice(state_batch)
+            pred_scores, transitions, scores, representation = transition_choice(state_batch)
             if keep_scores and scores is not None:
                 state_batch = [state._replace(score=state.score + score) for state, score in zip(state_batch, scores)]
             state_batch = parse_transitions.bulk_apply(self, state_batch, transitions)
