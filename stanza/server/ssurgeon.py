@@ -4,21 +4,29 @@ from stanza.server.java_protobuf_requests import send_request, add_token, add_wo
 
 SSURGEON_JAVA = "edu.stanford.nlp.semgraph.semgrex.ssurgeon.ProcessSsurgeonRequest"
 
+class SsurgeonEdit:
+    def __init__(self, semgrex_pattern, ssurgeon_edits, ssurgeon_id=None, notes=None):
+        # not a named tuple so we can have defaults without requiring a python upgrade
+        self.semgrex_pattern = semgrex_pattern
+        self.ssurgeon_edits = ssurgeon_edits
+        self.ssurgeon_id = ssurgeon_id
+        self.notes = notes
+
 def send_ssurgeon_request(request):
     return send_request(request, SsurgeonResponse, SSURGEON_JAVA)
 
-def build_request(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id=None, notes=None):
+def build_request(doc, ssurgeon_edits):
     request = SsurgeonRequest()
 
-    # TODO: make a version which allows for multiple Ssurgeon
-    ssurgeon = request.ssurgeon.add()
-    ssurgeon.semgrex = semgrex_pattern
-    for operation in ssurgeon_edits:
-        ssurgeon.operation.append(operation)
-    if ssurgeon_id is not None:
-        ssurgeon.id = ssurgeon_id
-    if notes is not None:
-        ssurgeon.notes = notes
+    for ssurgeon in ssurgeon_edits:
+        ssurgeon_proto = request.ssurgeon.add()
+        ssurgeon_proto.semgrex = ssurgeon.semgrex_pattern
+        for operation in ssurgeon.ssurgeon_edits:
+            ssurgeon_proto.operation.append(operation)
+        if ssurgeon.ssurgeon_id is not None:
+            ssurgeon_proto.id = ssurgeon.ssurgeon_id
+        if ssurgeon.notes is not None:
+            ssurgeon_proto.notes = ssurgeon.notes
 
     for sent_idx, sentence in enumerate(doc.sentences):
         graph = request.graph.add()
@@ -32,13 +40,22 @@ def build_request(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id=None, notes=
 
     return request
 
-def process_doc(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id=None, notes=None):
+def build_request_one_operation(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id=None, notes=None):
+    ssurgeon_edit = SsurgeonEdit(semgrex_pattern, ssurgeon_edits, ssurgeon_id, notes)
+    return build_request(doc, [ssurgeon_edit])
+
+def process_doc(doc, ssurgeon_edits):
     """
     Returns the result of processing the given semgrex expression and ssurgeon edits on the stanza doc.
 
     Currently the return is a SsurgeonResponse from CoreNLP.proto
     """
-    request = build_request(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id, notes)
+    request = build_request(doc, ssurgeon_edits)
+
+    return send_ssurgeon_request(request)
+
+def process_doc_one_operation(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id=None, notes=None):
+    request = build_request_one_operation(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id, notes)
 
     return send_ssurgeon_request(request)
 
@@ -52,13 +69,19 @@ class Ssurgeon(JavaProtobufContext):
     def __init__(self, classpath=None):
         super(Ssurgeon, self).__init__(classpath, SsurgeonResponse, SSURGEON_JAVA)
 
-    def process(self, doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id=None, notes=None):
+    def process(self, doc, ssurgeon_edits):
         """
-        Apply each of the semgrex patterns to each of the dependency trees in doc
+        Apply each of the ssurgeon patterns to each of the dependency trees in doc
         """
-        request = build_request(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id, notes)
+        request = build_request(doc, ssurgeon_edits)
         return self.process_request(request)
 
+    def process_one_operation(self, doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id=None, notes=None):
+        """
+        Convenience method - build one operation, then apply it
+        """
+        request = build_request_one_operation(doc, semgrex_pattern, ssurgeon_edits, ssurgeon_id, notes)
+        return self.process_request(request)
 
 def main():
     nlp = stanza.Pipeline('en',
@@ -67,7 +90,7 @@ def main():
     doc = nlp('Uro ruined modern.  Fortunately, Wotc banned him.')
     #print(doc.sentences[0].dependencies)
     print(doc)
-    print(process_doc(doc, "{}=source >obj=zzz {}=target", ["addEdge -gov source -dep target -reln iobj"]))
+    print(process_doc_one_operation(doc, "{}=source >obj=zzz {}=target", ["addEdge -gov source -dep target -reln iobj"]))
 
 if __name__ == '__main__':
     main()
