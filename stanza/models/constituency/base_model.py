@@ -202,7 +202,7 @@ class BaseModel(ABC):
                         constituents=constituents,
                         word_position=0,
                         score=0.0,
-                        shift_representations=TreeStack(None, None, 0))
+                        shift_representations=None)
                   for idx, wq in enumerate(word_queues)]
         if gold_trees:
             states = [state._replace(gold_tree=gold_tree) for gold_tree, state in zip(gold_trees, states)]
@@ -292,6 +292,9 @@ class BaseModel(ABC):
         if keep_constituents:
             constituents = defaultdict(list)
 
+        if keep_state:
+            shift_representations = defaultdict(list)
+
         while len(state_batch) > 0:
             pred_scores, transitions, scores, representation = transition_choice(state_batch)
             if keep_scores and scores is not None:
@@ -305,6 +308,12 @@ class BaseModel(ABC):
                         # constituents.value is the TreeStack node
                         # constituents.value.value is the Constituent itself (with the tree and the embedding)
                         constituents[batch_indices[t_idx]].append(state_batch[t_idx].constituents.value.value)
+
+            if keep_state:
+                for t_idx, transition in enumerate(transitions):
+                    if isinstance(transition, Shift):
+                        # TODO: make this smaller?
+                        shift_representations[t_idx].append(representations[t_idx, :])
 
             remove = set()
             for idx, state in enumerate(state_batch):
